@@ -7,3 +7,5 @@ git config --global user.name "name"
 
 # enable ssh
 eval `ssh-agent -s`
+
+/bin/bash "$@"

@@ -16,6 +16,5 @@ COPY docker_entrypoint.sh /workspace
 RUN chmod +x /workspace/docker_entrypoint.sh
 
 WORKDIR /workspace
-RUN git clone https://github.com/NVIDIA/deepops.git
 
-RUN ./deepops/scripts/setup.sh
+ENTRYPOINT [ "/bin/bash", "-c", "./docker_entrypoint.sh" ]

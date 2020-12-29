@@ -1,177 +1,161 @@
-# Deep ops deployment notes
+# Deep Ops Deployment Notes
 
-## Control system setup
+## Overview
 
-Deepops needs to be deployed from a control system running Ubuntu or Debian based distribution. Ansible can be installed on a mac but im not sure if I wanted to go that route so I just decided to use a ubuntu docker container.
+Deepops can be install using the latest Centos 7 distribution. I used plain vnailla server media installed via usb and not over the network. Deepops has options for installing via MAAS, pxe or Foreman and I tried pxe but couldn't get it to work correctly.
 
-I created a Dockerfile in this repo which is used to build the Docker image that I will be using. First, run the build command using `docker build -t deepops-setup .`
+I ran the provisioning from my mac pointing at the management server ip address. Addresses were automatically configured using dhcp from my router. I also installed [Zerotier](https://www.zerotier.com) so that I could ssh and kubectl the centos server using a virtual network ip. On the router, ipv6 was enabled.
+
+#### Dependencies
+
+After installing the os I had to install necessary dependencies in order to get the deepops install controller to communicate with my server. These included:
+- [ssh](https://phoenixnap.com/kb/how-to-enable-ssh-centos-7)
+- [ufw](https://linuxconfig.org/how-to-install-and-use-ufw-firewall-on-linux)
+- [nfs](https://www.thegeekdiary.com/centos-rhel-7-configuring-an-nfs-server-and-nfs-client/)
 
 
-#### Installed code
+After installing **nfs-utils** and configured deepops to use the nfs server share at `/srv/nfs/kubedata/`, I used ansible to [provision the nfs server](https://github.com/supertetelman/deepops/tree/nfs-client-provisioner/docs/k8s-cluster#nfs-client-provisioner). This happened after initially provisioning the cluster with deepops but can be included.
 
-Behind the scenes, the dockerfile is installing a few dependencies, cloning the deepops repo, located here https://github.com/NVIDIA/deepops.git, and then running `./setup.sh`.
+#### Deepops
 
+Deepops is software maintained by Nvidia at this github project: https://github.com/NVIDIA/deepops.git
 
-## Host setup: Edit sshd_config
+**Important** First clone deepops to this repo root before running the controller.
 
-`vim /etc/ssh/sshd_config`
+I configured my server using the 20.10 release but later reinstalled/updated just the nfs-client-provisioner using the project here: https://github.com/supertetelman/deepops/tree/nfs-client-provisioner
 
-Before we begin the rest of the setup, I went ahead and configured my control system node to be able to access the target host. To provision kubernetes over SSH, we must modify the sshd_config. The commmand is located at the top of this section for convenience. I then either change or unccoment the following lines:
+## Control
+
+To control the provisioning from my mac I created this [Dockerfile](./Dockerfile) Before running the container in interactive mode, we have to build the image.
+
 
 ```
-PermitRootLogin prohibit-password
-
-PubkeyAuthentication yes
-
-AuthorizedKeysFile .ssh/authorized_keys
-
-PasswordAuthentication no
-
-ChallengeResponseAuthentication no
-
-UsePAM yes
-
-X11Forwarding yes
-
-PrintMotd no
+docker build -t deepops-setup .
 ```
 
-type `sudo service sshd restart` to configure the server with the new settings.
+During provisioning a file is created to kubectl the cluster. In order to use that file so that I can use kubectl from my mac terminal, I mount the ~/.kube directory as a volume. I also bind mount the deepops directory in the target workspace so that I may save the configuration files for source control.
 
-
-#### Create ouser with sudo privileges
-
-After modifying the ssh config, I went ahead and created a new sudo user on the host machine called 'ouser'. Follow the instructions here to create this user:
-
-https://www.digitalocean.com/community/tutorials/how-to-create-a-sudo-user-on-ubuntu-quickstart
-
-
-## Control system host setup: Generate new SSH keypair
-
-One of the things we have to do is add a new ssh keypair from the Control system host machine. For this I followed the github tutorial located here:
-
-https://help.github.com/en/github/authenticating-to-github/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent
-
-
-## Bash shell into Ubuntu container
-
-Finally, we are ready to run the container in interactive mode, in order to provision deepops with ansbile. Run the following command on the control system, making sure to modify your path to match your setup:
+Use the following command to run our provisioning container interactively (ensure you are running from repo root):
 
 ```
-docker run -v /Users/gmacmillan/.ssh:/root/.ssh -it deepops-setup:latest /bin/bash
-```
-
-Note: use of the `-it` flag for interactive mode.
-
-The -v flag is used to mount a passthrough to ~/.ssh so that the container may used host keys to access the target nodes file system.
-
-Once in your interactive sub-shell run `cd deepops` to change to the cloned repo.
-
-
-## Edit inventory file
-
-`vim config/inventory`
-
-Our inventory file is going to contain the necessary setup variables to configure a new ansible host. I set the name of the new host to be `deepops-station`. This can be changed depending on what you want your cluster to be called. My config was modified for a single node but you may be provisioning this cluster with multiple nodes. Make the master node the one you want to run control plane jobs on. I then added `deepops-station` under [all], [kube-master], [etcd], as well as [kube-node]. Where it says `ansible-host`, I changed the ip address to match my target node ip. For me this was the internal network ip.
-
-One other thing I added is, under `[all:vars]`, I changed `ansible_user` and `ansible_ssh_private_key_file` to:
-
-```
-ansible_user=ouser
-ansible_ssh_private_key_file='~/.ssh/ouser_id_rsa'
+docker run -v $HOME/.kube:/root/.kube \
+           --mount src="$(pwd)/deepops",target=/workspace/deepops,type=bind \
+           -it deepops-setup:latest
 ```
 
 
-## Edit Ansible config
 
-`vim ansible.cfg`
 
-On my system, I was having problems getting the control machine to ping the host machine. This was despite being able to ssh to the node and become root. I searched for and found the following post on stack overflow the descirbed a fix.
 
-https://stackoverflow.com/questions/31649421/ansible-wont-let-me-connect-through-ssh
-
-From this post, it was just a matter of following the 2nd answer which tells you to modify the following line:
+the following command on the control system, making sure to modify your path to match your setup:
 
 ```
-[ssh_connection]
-control_path_dir=/dev/shm/ansible_control_path
+docker run -v /Users/gmacmillan/.kube:/root/.kube \
+           -v $(pwd)deepops:/workspace/deepops \
+           -it deepops-setup:latest \
+           /bin/bash
 ```
 
-The output from running a ping test should be something like:
-
+You should see a terminal that looks something like:
 ```
-root@2203fef47a31:/workspace/deepops# ansible deepops-station -m ping -K
-BECOME password:
-[WARNING]: Invalid characters were found in group names but not replaced, use -vvvv to see details
-
-PLAY [Ansible Ad-Hoc] ************************************************************************************************************************************************************************************************************************
-
-TASK [ping] **********************************************************************************************************************************************************************************************************************************
-ok: [deepops-station]
-
-PLAY RECAP ***********************************************************************************************************************************************************************************************************************************
-deepops-station            : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+root@7977eae54cc4:/workspace#
 ```
 
-## NVIDIA dependency issue
-
-`vim playbooks/nvidia-driver.yml`
-
-This part really threw me for a loop but I figured out that A, the NVIDIA driver issued with PopOS is good and B, Ubuntu 19.10 is not yet supported by deepops provisioner. To fix this issue with NVIDIA drivers, delete the following from the nvidia-driver playbook:
+cd to the `deepops` directory [Optional] checkout the latest branch with YY.MM refering to a release. e.g. 20.10
 
 ```
-    - name: install nvidia driver
-      include_role:
-        name: nvidia.nvidia_driver
-      when:
-        - ansible_local['gpus']['count']
-        - is_dgx.stat.exists == False
+cd deepops
+git checkout YY.MM
+```
+
+and run `./scripts/setup.sh`
+
+#### Configure the inventory
+
+First you must change the `config/inventory` file. For my setup using a single node, I uncommented the first line under **[all]**, **[kube-master]**, **[etcd]**, and **[kube-node]**. Under the **[all]** section, change the ansible_host to be whatever ip is being used from your provisioner.
+
+If you are going to use an existing nfs-server, be sure to update the __k8s_nfs_server__ and __k8s_nfs_export_path__ variables in config/group_vars/k8s-cluster.yml
+
+#### Test the ansible host connection
+
+```
+ansible all -m raw -a "hostname"
+```
+
+#### Run the installation
+
+Run with `--skip-tags=nfs_server` if the nfs server is already setup; `nfs_mkdir` if the share directory is created.
+
+```
+ansible-playbook -l k8s-cluster playbooks/k8s-cluster.yml
 ```
 
 
-## Run Ansible playbook
-
-Now we are ready to run the playbook and provision a kubernetes cluster using the following command:
-
-`ansible-playbook -l k8s-cluster -K playbooks/k8s-cluster.yml`
+## Old Notes
+The following are older notes and not necessarily up to date. I haven't tried rook/ceph since nfs is working.
 
 
-## Fix GPU container not working issue
-
-I was having an issue where the GPU wasn't visible to docker containers at runtime. The command and subsequent error seen on the host machine was:
+#### Deploy dashboard
 
 ```
-root@deepops-station:/home/ouser# docker run --rm nvidia/cuda nvidia-smi
-docker: Error response from daemon: OCI runtime create failed: container_linux.go:349: starting container process caused "process_linux.go:449: container init caused \"process_linux.go:432: running prestart hook 1 caused \\\"error running hook: exit status 1, stdout: , stderr: nvidia-container-cli: detection error: driver error: failed to process request\\\\n\\\"\"": unknown.
+root@827a859971f9:/workspace/deepops# ./scripts/k8s/deploy_dashboard_user.sh
+service/kubernetes-dashboard patched
+serviceaccount/admin-user created
+clusterrolebinding.rbac.authorization.k8s.io/admin-user created
+
+Dashboard is available at: https://192.168.50.8:31443
+
+More on dashboard here:
+https://tjth.co/setting-up-externally-available-kubernetes-dashboard/
+
+
+Access token:```
+###
 ```
 
-Solutions to this error were posted about here: https://github.com/NVIDIA/nvidia-docker/issues/1114
+#### Connection not private screen workaround
 
-Specifically, this post looked reasonable: https://github.com/NVIDIA/nvidia-docker/issues/1114#issuecomment-605407508
+https://www.technipages.com/google-chrome-bypass-your-connection-is-not-private-message
 
-Finally, I solved the issue by following the steps in this post: https://github.com/pop-os/nvidia-container-toolkit/issues/1
+  1. Click a blank section of the denial page.
+  2. Using your keyboard, type thisisunsafe. This will add the website to a safe list, where you should not be prompted again.
 
-I skipped the part where it says to install the nvidia_driver because my driver worked just fine
 
-Finally, after a restart, it still didn't work so I ran `sudo apt-get upgrade` and restarted docker with `systemctl restart docker`
+#### Rook/Ceph
 
-I was able to type the following command and see the output I wanted:
-```
-root@deepops-station:/home/ouser# docker run --rm nvidia/cuda nvidia-smi
-Mon Mar 30 17:36:25 2020
-+-----------------------------------------------------------------------------+
-| NVIDIA-SMI 440.44       Driver Version: 440.44       CUDA Version: 10.2     |
-|-------------------------------+----------------------+----------------------+
-| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
-| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
-|===============================+======================+======================|
-|   0  GeForce GTX 1080    Off  | 00000000:2F:00.0 Off |                  N/A |
-| 27%   29C    P8     5W / 180W |    280MiB /  8116MiB |      1%      Default |
-+-------------------------------+----------------------+----------------------+
+NOTES:
+The Rook Operator has been installed. Check its status by running:
+  kubectl --namespace rook-ceph get pods -l "app=rook-ceph-operator"
 
-+-----------------------------------------------------------------------------+
-| Processes:                                                       GPU Memory |
-|  GPU       PID   Type   Process name                             Usage      |
-|=============================================================================|
-+-----------------------------------------------------------------------------+
-```
+Visit https://rook.io/docs/rook/master for instructions on how to create and configure Rook clusters
+
+Note: You cannot just create a CephCluster resource, you need to also create a namespace and
+install suitable RBAC roles and role bindings for the cluster. The Rook Operator will not do
+this for you. Sample CephCluster manifest templates that include RBAC resources are available:
+
+- https://rook.github.io/docs/rook/master/ceph-quickstart.html
+- https://github.com/rook/rook/blob/master/cluster/examples/kubernetes/ceph/cluster.yaml
+
+Important Notes:
+- The links above are for the unreleased master version, if you deploy a different release you must find matching manifests.
+- You must customise the 'CephCluster' resource at the bottom of the sample manifests to met your situation.
+- Each CephCluster must be deployed to its own namespace, the samples use `rook-ceph` for the cluster.
+- The sample manifests assume you also installed the rook-ceph operator in the `rook-ceph` namespace.
+- The helm chart includes all the RBAC required to create a CephCluster CRD in the same namespace.
+- Any disk devices you add to the cluster in the 'CephCluster' must be empty (no filesystem and no partitions).
+- In the 'CephCluster' you must refer to disk devices by their '/dev/something' name, e.g. 'sdb' or 'xvde'.
+cephcluster.ceph.rook.io/rook-ceph created
+cephblockpool.ceph.rook.io/replicapool created
+storageclass.storage.k8s.io/rook-ceph-block created
+deployment.apps/rook-ceph-tools created
+cephfilesystem.ceph.rook.io/cephfs created
+service/rook-ceph-mgr-dashboard-external-https created
+
+Ceph deployed, it may take up to 10 minutes for storage to be ready
+If install takes more than 30 minutes be sure you have cleaned up any previous Rook installs by running this script with the delete flag (-d) and have installed the required libraries using the bootstrap-rook.yml playbook
+Monitor readiness with:
+kubectl -n rook-ceph exec -ti rook-ceph-tools-8d9d7c8f4-vl9r2 -- ceph status | grep up:active
+
+Ceph dashboard: https://192.168.50.8:31141
+
+Create dashboard user with: kubectl -n rook-ceph exec -ti rook-ceph-tools-8d9d7c8f4-vl9r2 -- ceph dashboard set-login-credentials <username> <password>
