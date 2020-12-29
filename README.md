@@ -90,6 +90,20 @@ Run with `--skip-tags=nfs_server` if the nfs server is already setup; `nfs_mkdir
 ansible-playbook -l k8s-cluster playbooks/k8s-cluster.yml
 ```
 
+## Kubeflow install notes
+
+For more info see instructions here: https://github.com/supertetelman/deepops/blob/nfs-client-provisioner/docs/k8s-cluster/kubeflow.md#kubeflow-admin
+
+Kubeflow app installed to: /workspace/deepops/scripts/k8s/../../config/kubeflow-install
+
+It may take several minutes for all services to start. Run `kubectl get pods -n kubeflow` to verify
+
+To remove (excluding CRDs, istio, auth, and cert-manager), run: ```./scripts/k8s/deploy_kubeflow.sh -d```
+
+To perform a full uninstall : ```./scripts/k8s/deploy_kubeflow.sh -D```
+
+Kubeflow Dashboard (HTTP NodePort): http://192.168.50.191:31380
+
 
 ## Old Notes
 The following are older notes and not necessarily up to date. I haven't tried rook/ceph since nfs is working.
